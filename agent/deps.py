@@ -15,3 +15,5 @@ class SupervisorDeps:
     mcp: Any             # Wave 2  — MCP stdio 클라이언트 (Tool/Resource/Prompt)
     session_store: Any   # Wave 12 — SQLite 세션 저장소
     version: str         # Wave 14 — SUPERVISOR_VERSION (v1/v2)
+
+    search: Any = None   # 매뉴얼 검색은 테스트에서 고정 검색으로 바꿔 끼운다.

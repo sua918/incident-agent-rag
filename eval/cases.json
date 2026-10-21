@@ -1,0 +1,170 @@
+[
+  {
+    "id": "cpu-spike-alerts",
+    "query": "payments-service 처리 작업이 몰리며 CPU가 치솟았습니다.",
+    "observations": [
+      {
+        "system_name": "payments-service",
+        "status": "degraded",
+        "alerts": [
+          "CPU 91%"
+        ]
+      }
+    ],
+    "expected": "cpu-spike",
+    "condition": "alerts"
+  },
+  {
+    "id": "cpu-spike-question_only",
+    "query": "payments-service 처리 작업이 몰리며 CPU가 치솟았습니다.",
+    "observations": [
+      {
+        "system_name": "payments-service",
+        "status": "healthy",
+        "alerts": []
+      }
+    ],
+    "expected": "cpu-spike",
+    "condition": "question_only"
+  },
+  {
+    "id": "memory-leak-alerts",
+    "query": "cache-service 메모리가 계속 쌓이고 OOM 위험이 있습니다.",
+    "observations": [
+      {
+        "system_name": "cache-service",
+        "status": "degraded",
+        "alerts": [
+          "memory usage climbing; heap near limit"
+        ]
+      }
+    ],
+    "expected": "memory-leak",
+    "condition": "alerts"
+  },
+  {
+    "id": "memory-leak-question_only",
+    "query": "cache-service 메모리가 계속 쌓이고 OOM 위험이 있습니다.",
+    "observations": [
+      {
+        "system_name": "cache-service",
+        "status": "healthy",
+        "alerts": []
+      }
+    ],
+    "expected": "memory-leak",
+    "condition": "question_only"
+  },
+  {
+    "id": "disk-full-alerts",
+    "query": "log-service 저장 공간이 거의 가득 찼고 로그를 쓸 수 없습니다.",
+    "observations": [
+      {
+        "system_name": "log-service",
+        "status": "degraded",
+        "alerts": [
+          "disk space low"
+        ]
+      }
+    ],
+    "expected": "disk-full",
+    "condition": "alerts"
+  },
+  {
+    "id": "disk-full-question_only",
+    "query": "log-service 저장 공간이 거의 가득 찼고 로그를 쓸 수 없습니다.",
+    "observations": [
+      {
+        "system_name": "log-service",
+        "status": "healthy",
+        "alerts": []
+      }
+    ],
+    "expected": "disk-full",
+    "condition": "question_only"
+  },
+  {
+    "id": "network-timeout-alerts",
+    "query": "gateway-service에서 다른 서비스로 보내는 요청이 응답 없이 시간 초과됩니다.",
+    "observations": [
+      {
+        "system_name": "gateway-service에서",
+        "status": "degraded",
+        "alerts": [
+          "upstream timeout; network packet loss"
+        ]
+      }
+    ],
+    "expected": "network-timeout",
+    "condition": "alerts"
+  },
+  {
+    "id": "network-timeout-question_only",
+    "query": "gateway-service에서 다른 서비스로 보내는 요청이 응답 없이 시간 초과됩니다.",
+    "observations": [
+      {
+        "system_name": "gateway-service에서",
+        "status": "healthy",
+        "alerts": []
+      }
+    ],
+    "expected": "network-timeout",
+    "condition": "question_only"
+  },
+  {
+    "id": "high-latency-alerts",
+    "query": "auth-service 로그인 응답이 느리고 커넥션 풀이 꽉 찼습니다.",
+    "observations": [
+      {
+        "system_name": "auth-service",
+        "status": "degraded",
+        "alerts": [
+          "p95 latency 2.4s; connection pool 92%"
+        ]
+      }
+    ],
+    "expected": "high-latency",
+    "condition": "alerts"
+  },
+  {
+    "id": "high-latency-question_only",
+    "query": "auth-service 로그인 응답이 느리고 커넥션 풀이 꽉 찼습니다.",
+    "observations": [
+      {
+        "system_name": "auth-service",
+        "status": "healthy",
+        "alerts": []
+      }
+    ],
+    "expected": "high-latency",
+    "condition": "question_only"
+  },
+  {
+    "id": "db-down-alerts",
+    "query": "auth-service 데이터베이스가 중단되어 연결이 끊겼습니다.",
+    "observations": [
+      {
+        "system_name": "auth-service",
+        "status": "degraded",
+        "alerts": [
+          "database down"
+        ]
+      }
+    ],
+    "expected": "db-down",
+    "condition": "alerts"
+  },
+  {
+    "id": "db-down-question_only",
+    "query": "auth-service 데이터베이스가 중단되어 연결이 끊겼습니다.",
+    "observations": [
+      {
+        "system_name": "auth-service",
+        "status": "healthy",
+        "alerts": []
+      }
+    ],
+    "expected": "db-down",
+    "condition": "question_only"
+  }
+]

@@ -8,6 +8,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 os.environ['LLM_BACKEND']='fake'
+os.environ['RUNBOOK_SEARCH']='rules'
 os.environ['SUPERVISOR_VERSION']='v2'
 os.environ['LANGCHAIN_TRACING_V2']='false'
 os.environ['LANGSMITH_TRACING']='false'
@@ -136,6 +137,7 @@ class ApiTests(unittest.TestCase):
         finally: mcp.read_resource=original
         self.assertEqual(result['metadata']['status'],'needs_review')
         self.assertEqual(result['metadata']['failed_sources'][0]['source'],'runbook')
+        self.assertEqual(result['metadata']['sources'],[])
         self.assertIn('auth-service',result['reply'])
 
     def test_stream_saves_history_and_excludes_raw_draft_and_prompt(self):
@@ -156,6 +158,27 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(result['metadata']['failed_sources'][0]['target'],'missing-service')
         self.assertNotIn('DB Down',result['reply'])
         self.assertIn('web-01',result['reply'])
+
+    def test_wrong_observed_value_is_rewritten_then_held(self):
+        class WrongWriter:
+            calls=0
+            async def write(self,*args,**kwargs):
+                self.calls+=1
+                return '1) auth-service 상태=degraded, CPU 99%입니다. 2) 관측값을 확인하고 필요한 조치를 검토하세요.', {'usd':0}
+        deps=server.app.state.deps;original=deps.quality_llm;writer=WrongWriter();deps.quality_llm=writer
+        try: result=self.chat(thread='wrong-cpu')
+        finally: deps.quality_llm=original
+        self.assertEqual(writer.calls,3)
+        self.assertEqual(result['metadata']['status'],'needs_review')
+        self.assertNotIn('99%',result['reply'])
+        self.assertTrue(any('조회값' in item for item in result['metadata']['validation_issues']))
+
+    def test_history_keeps_facts_and_verified_sources(self):
+        result=self.chat(thread='evidence-history')
+        detail=self.client.get('/diagnoses/'+result['metadata']['diagnosis_id']).json()
+        self.assertEqual(len(detail['facts']),2)
+        self.assertEqual(len(detail['sources']),3)
+        self.assertEqual(detail['search_mode'],'rules')
 
     def test_history_invalid_filter_and_missing_id(self):
         self.assertEqual(self.client.get('/diagnoses?status=unknown').status_code,422)

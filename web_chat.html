@@ -101,6 +101,12 @@
   .history-detail h3 { font-size:16px; line-height:1.7; margin:16px 0 9px; overflow-wrap:anywhere; }
   .history-detail p { font-size:13px; line-height:1.9; white-space:pre-wrap; overflow-wrap:anywhere; padding:20px 0; border-top:1px solid #3a3a52; margin-top:22px; }
   @media(max-width:600px) { header { padding:12px 14px; font-size:13px; } header span { display:block; margin:5px 0 0; font-size:10px; } #log { padding:16px; } .bubble,.steps { max-width:93%; } form { padding:12px; } form input { min-width:0; font-size:13px; } form button { padding:10px 14px; font-size:13px; } }
+  .answer-evidence { white-space:normal; font-size:12px; margin-top:18px; border-top:1px solid #45455c; padding-top:12px; }
+  .answer-evidence summary { cursor:pointer; color:#bbbbed; }
+  .answer-evidence p { font-size:12px; line-height:1.8; margin:10px 0; padding:0; border:0; }
+  .answer-evidence>div { padding:12px 0; border-bottom:1px solid #45455c; }
+  .answer-evidence strong { font-size:12px; font-weight:500; }
+  .answer-evidence small { font-size:10px; color:#9999b7; }
 </style>
 </head>
 <body>
@@ -112,7 +118,7 @@
     <div v-if="!historySelected" class="history-filters"><input v-model="historyQuery" aria-label="진단 검색" placeholder="시스템명이나 문의 내용 검색" @input="scheduleHistory"><select v-model="historyStatus" aria-label="진단 상태" @change="loadHistory"><option value="">모든 상태</option><option value="completed">완료</option><option value="needs_review">확인 필요</option></select></div>
     <p v-if="historyError" class="history-error" role="alert">{{ historyError }}</p>
     <p v-if="historyLoading" class="history-empty" role="status">이력을 불러오고 있습니다.</p>
-    <article v-else-if="historySelected" class="history-detail"><button type="button" class="history-back" @click="historySelected = null">← 목록으로</button><span class="result-status" :class="historySelected.status">{{ historySelected.status === 'needs_review' ? '확인 필요' : '완료' }}</span><h3>{{ historySelected.query }}</h3><time>{{ formatTime(historySelected.created) }}</time><p>{{ historySelected.reply }}</p></article>
+    <article v-else-if="historySelected" class="history-detail"><button type="button" class="history-back" @click="historySelected = null">← 목록으로</button><span class="result-status" :class="historySelected.status">{{ historySelected.status === 'needs_review' ? '확인 필요' : '완료' }}</span><h3>{{ historySelected.query }}</h3><time>{{ formatTime(historySelected.created) }}</time><p>{{ historySelected.reply }}</p><details v-if="historySelected.sources?.length" class="answer-evidence"><summary>참고 매뉴얼</summary><div v-for="source in historySelected.sources" :key="source.id"><strong>{{ source.title }}</strong><p>{{ source.text }}</p><small>{{ source.id }}</small></div></details><details v-if="historySelected.validation_issues?.length" class="answer-evidence"><summary>확인 필요 사유</summary><p v-for="issue in historySelected.validation_issues" :key="issue">{{ issue }}</p></details></article>
     <div v-else class="history-list"><button v-for="item in historyRows" :key="item.id" type="button" class="history-row" @click="selectHistory(item.id)"><span class="result-status" :class="item.status">{{ item.status === 'needs_review' ? '확인 필요' : '완료' }}</span><strong>{{ item.query }}</strong><time>{{ formatTime(item.created) }}</time></button><p v-if="!historyRows.length" class="history-empty">{{ historyQuery || historyStatus ? '검색 조건에 맞는 이력이 없습니다.' : '저장된 장애 진단이 없습니다.' }}</p></div>
   </aside>
   <div id="log" ref="logEl">
@@ -126,7 +132,11 @@
       </div>
 
       <div v-else-if="item.kind === 'agent'" class="row agent">
-        <div class="bubble" :class="{ review: item.status === 'needs_review' }"><span v-if="item.status === 'needs_review'" class="review-label">담당자 확인 필요</span>{{ item.text }}</div>
+        <div class="bubble" :class="{ review: item.status === 'needs_review' }"><span v-if="item.status === 'needs_review'" class="review-label">담당자 확인 필요</span>{{ item.text }}
+          <details v-if="item.facts?.length" class="answer-evidence"><summary>확인한 모니터링 정보</summary><p v-for="fact in item.facts" :key="fact.system_name">{{ fact.system_name }} · {{ fact.status }} · CPU {{ fact.cpu_percent }}% · 메모리 {{ fact.memory_percent }}%</p></details>
+          <details v-if="item.sources?.length" class="answer-evidence"><summary>참고한 매뉴얼 {{ item.sources.length }}개 문단</summary><p v-if="item.searchMode === 'rules_fallback'">의미 검색 연결이 원활하지 않아 유형별 매뉴얼을 확인했습니다.</p><div v-for="source in item.sources" :key="source.id"><strong>{{ source.title }}</strong><p>{{ source.text }}</p><small>{{ source.id }}</small></div></details>
+          <details v-if="item.issues?.length" class="answer-evidence"><summary>확인이 필요한 내용</summary><p v-for="issue in item.issues" :key="issue">{{ issue }}</p></details>
+        </div>
       </div>
     </template>
   </div>
@@ -147,6 +157,7 @@ const { createApp, ref, reactive, nextTick } = Vue;
 const STEP_LABELS = {
   PlanCreated: e => `계획 수립: 할 일 ${e.task_count}가지${e.targets?.length ? ` (시스템: ${e.targets.join(', ')})` : ''}`,
   GateApplied: e => e.removed_analysis_tasks ? `불필요한 작업 ${e.removed_analysis_tasks}건 제거` : null,
+  RunbookSearch: e => `${e.mode === 'rag' ? '관련 매뉴얼 검색' : e.mode === 'rules_fallback' ? '검색 연결 실패 · 규칙으로 매뉴얼 확인' : '유형별 매뉴얼 확인'}: ${e.count}개 문단`,
   TaskFailed: e => `조회 실패: ${e.target} · 다른 자료는 계속 확인합니다`,
   DraftSkipped: () => '조회 자료가 없어 진단을 확정하지 않습니다',
   TaskCompleted: e => (e.source === 'monitoring'
@@ -243,6 +254,10 @@ createApp({
             streamItem = reactive({ id: nextId++, kind: 'agent', text: '' });
             log.value.push(streamItem);
           }
+          streamItem.sources = e.sources || [];
+          streamItem.facts = e.facts || [];
+          streamItem.issues = e.validation_issues || [];
+          streamItem.searchMode = e.search_mode;
           streamItem.status = e.status;
           streamItem.text = e.reply;   // 토큰 합산 결과와 서버의 최종 텍스트를 일치시킨다
           if (historyOpen.value && !historySelected.value) loadHistory();

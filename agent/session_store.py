@@ -23,6 +23,8 @@ class SqliteSessionStore:
         )
         self.conn.execute("CREATE TABLE IF NOT EXISTS diagnoses(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, query TEXT NOT NULL, reply TEXT NOT NULL, status TEXT NOT NULL, validation_passed INTEGER, attempts INTEGER NOT NULL, failures_json TEXT NOT NULL, created TEXT NOT NULL)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_diagnoses_created ON diagnoses(created)")
+        if "details_json" not in {row[1] for row in self.conn.execute("PRAGMA table_info(diagnoses)")}:
+            self.conn.execute("ALTER TABLE diagnoses ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'")
         self.conn.commit()
 
     def load(self, thread_id: str) -> list[dict]:
@@ -48,10 +50,10 @@ class SqliteSessionStore:
         diagnosis_id = "D-" + uuid4().hex[:12].upper()
         passed = result.get("validation_passed")
         with closing(sqlite3.connect(self.db_path, timeout=10)) as db, db:
-            db.execute("INSERT INTO diagnoses VALUES(?,?,?,?,?,?,?,?,?)", (
+            db.execute("INSERT INTO diagnoses(id,thread_id,query,reply,status,validation_passed,attempts,failures_json,created,details_json) VALUES(?,?,?,?,?,?,?,?,?,?)", (
                 diagnosis_id, thread_id, query, result["final"], result.get("status", "completed"),
                 None if passed is None else int(passed), result.get("validation_attempts", 0),
-                json.dumps(result.get("failed_sources", []), ensure_ascii=False), datetime.now().astimezone().isoformat(timespec="seconds")))
+                json.dumps(result.get("failed_sources", []), ensure_ascii=False), datetime.now().astimezone().isoformat(timespec="seconds"), json.dumps({key:result.get(key) for key in ["sources","facts","validation_issues","search_mode"]},ensure_ascii=False)))
         return diagnosis_id
 
     def list_diagnoses(self, query: str = "", status: str = "") -> list[dict]:
@@ -67,6 +69,7 @@ class SqliteSessionStore:
         if not row:
             return None
         value = dict(row)
+        value.update(json.loads(value.pop("details_json", "{}")))
         value["failed_sources"] = json.loads(value.pop("failures_json"))
         value["validation_passed"] = None if value["validation_passed"] is None else bool(value["validation_passed"])
         return value

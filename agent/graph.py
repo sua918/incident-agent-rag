@@ -21,6 +21,7 @@ from langsmith import traceable
 
 from .deps import SupervisorDeps
 from .retry import with_retry
+from .validation import validate_evidence
 
 
 def _load_known_systems() -> set[str]:
@@ -61,6 +62,11 @@ class AgentState(TypedDict, total=False):
     parallel_elapsed: float
     draft: str
     validation_attempts: int
+    runbook_search: dict
+    sources: list[dict]
+    facts: list[dict]
+    search_mode: str
+    validation_issues: list[str]
     failed_sources: list[dict]
     validation_passed: bool
     status: str
@@ -158,6 +164,11 @@ async def research_node(state: AgentState, deps: SupervisorDeps) -> dict:
         data = await deps.mcp.read_resource(template.format(incident_type=task["target"]), server=server)
         if not data.strip() or data.lstrip().startswith("# Runbook Not Found"):
             raise LookupError("대응 매뉴얼 없음")
+        hits = [h for h in state.get("runbook_search", {}).get("hits", []) if h["incident_type"] == task["target"]]
+        if hits:
+            if any(hit["text"] not in data for hit in hits):
+                raise ValueError("검색 근거와 매뉴얼 원문이 다릅니다.")
+            data = "# " + hits[0]["title"] + "\n\n" + "\n".join(hit["text"] for hit in hits)
         return {"source": "runbook", "data": data, "retries": 0}
 
     started = time.perf_counter()
@@ -227,13 +238,20 @@ async def replan_check_node(state: AgentState, deps: SupervisorDeps) -> dict:
     if has_runbook or rounds >= 1:
         verdict = {"type": "ReplanCheck", "round": rounds, "is_sufficient": True}
         return {"events": state["events"] + [verdict]}
-    incident_type = _classify_incident_type(state.get("collected", []))
-    gap_task = {"id": "task-gap-runbook", "agent": "research", "kind": "runbook",
-                "target": incident_type, "status": "pending"}
-    verdict = {"type": "ReplanCheck", "round": rounds, "is_sufficient": False,
-               "gap_task": gap_task["id"], "target": incident_type}
-    return {"tasks": state["tasks"] + [gap_task], "replan_rounds": rounds + 1,
-            "events": state["events"] + [verdict]}
+    observations = [item["data"] for item in state.get("collected", []) if item["source"] == "monitoring"]
+    search = await deps.search.search(state["query"], observations)
+    kinds = list(dict.fromkeys(hit["incident_type"] for hit in search["hits"]))
+    event = {"type":"RunbookSearch", "mode":search["mode"], "count":len(search["hits"])}
+    if not kinds:
+        failure = {"task_id":"runbook-search", "source":"runbook", "target":"관련 매뉴얼", "error":"NoEvidence"}
+        return {"runbook_search":search,"failed_sources":state.get("failed_sources",[])+[failure],
+                "events":state["events"]+[event,{"type":"ReplanCheck","round":rounds,"is_sufficient":True}]}
+    # 검색한 문서만 원문으로 확인하고, 추가 조사는 한 번으로 제한한다.
+    tasks = [{"id":"task-gap-"+kind,"agent":"research","kind":"runbook","target":kind,"status":"pending"} for kind in kinds]
+    verdict = {"type":"ReplanCheck","round":rounds,"is_sufficient":False,"target":", ".join(kinds)}
+    return {"tasks":state["tasks"]+tasks,"runbook_search":search,"replan_rounds":rounds+1,
+            "events":state["events"]+[event,verdict]}
+
 
 
 @traceable(name="analysis_node")
@@ -269,6 +287,11 @@ async def write_node(state: AgentState, deps: SupervisorDeps) -> dict:
             "events": state["events"] + [{"type": "DraftWritten", "attempt": attempt, "length": len(draft)}]}
 
 
+def confirmed_sources(state):
+    done = {task["target"] for task in state.get("tasks",[]) if task.get("kind")=="runbook" and task["status"]=="done"}
+    return [hit for hit in state.get("runbook_search",{}).get("hits",[]) if hit["incident_type"] in done]
+
+
 @traceable(name="validate_node")
 async def validate_node(state: AgentState, deps: SupervisorDeps) -> dict:
     draft = state["draft"]
@@ -280,10 +303,12 @@ async def validate_node(state: AgentState, deps: SupervisorDeps) -> dict:
         issues.append("답변을 30자 이상으로 구체적으로 설명하세요.")
     if "1)" not in draft:
         issues.append("대응 절차를 1) 2) 3) 번호로 설명하세요.")
+    observations = [c["data"] for c in state.get("collected", []) if c["source"] == "monitoring"]
+    issues.extend(validate_evidence(draft, observations, confirmed_sources(state), state.get("query", "")))
     passed = not issues
     exhausted = not passed and (attempts >= 3 or not state.get("collected"))
     verdict = "합격" if passed else ("확인 필요" if exhausted else "불합격")
-    return {"validation_attempts": attempts, "validation_passed": passed,
+    return {"validation_attempts": attempts, "validation_passed": passed, "validation_issues": issues,
             "validation_feedback": " ".join(issues) if issues else None,
             "events": state["events"] + [{"type": "Validation", "attempt": attempts, "verdict": verdict}]}
 
@@ -306,6 +331,9 @@ async def finalize_node(state: AgentState, deps: SupervisorDeps) -> dict:
         reply += "\n\n조회하지 못한 대상: " + targets
     status = "needs_review" if review else "completed"
     return {"final": reply, "status": status,
+            "sources": confirmed_sources(state),
+            "facts": [c["data"] for c in state.get("collected", []) if c["source"] == "monitoring"],
+            "search_mode": state.get("runbook_search", {}).get("mode"),
             "events": state["events"] + [{"type": "Finalize", "pipeline": "incident-v2", "status": status}]}
 
 

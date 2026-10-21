@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from agent.deps import SupervisorDeps
 from agent.fake_llm import FastLLM, QualityLLM
 from agent.graph import build_graph
+from agent.rag import RunbookSearch
 from agent.mcp_client import MCPClient
 from agent.session_store import SqliteSessionStore
 from agent.supervisor_v1 import run_v1
@@ -74,6 +75,7 @@ async def lifespan(app: FastAPI):
         mcp=mcp,
         session_store=SqliteSessionStore(Path(os.getenv("SESSION_DATABASE", Path(__file__).parent / "session.db"))),
         version=os.environ.get("SUPERVISOR_VERSION", "v2"),
+        search=RunbookSearch(),
     )
     app.state.deps = deps
     app.state.graph = build_graph(deps) if deps.version == "v2" else None
@@ -108,6 +110,10 @@ async def version():
 
 def _metadata(result: dict, run_id: str | None) -> dict:
     return {
+        "sources": result.get("sources", []),
+        "facts": result.get("facts", []),
+        "validation_issues": result.get("validation_issues", []),
+        "search_mode": result.get("search_mode"),
         "status": result.get("status", "completed"),
         "validation_passed": result.get("validation_passed"),
         "failed_sources": result.get("failed_sources", []),
@@ -193,7 +199,7 @@ async def chat_stream(message: str, thread_id: str = "default"):
             diagnosis_id = deps.session_store.save_diagnosis(thread_id, message, summary)
             deps.session_store.append(thread_id, "user", message)
             deps.session_store.append(thread_id, "assistant", final)
-            answer = {"type": "FinalAnswer", "reply": final, "status": summary.get("status", "completed"), "validation_passed": summary.get("validation_passed"), "diagnosis_id": diagnosis_id}
+            answer = {"type": "FinalAnswer", "reply": final, "status": summary.get("status", "completed"), "validation_passed": summary.get("validation_passed"), "diagnosis_id": diagnosis_id, "sources": summary.get("sources", []), "facts": summary.get("facts", []), "validation_issues": summary.get("validation_issues", []), "search_mode": summary.get("search_mode")}
             yield f"data: {json.dumps(answer, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
