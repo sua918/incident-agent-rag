@@ -10,6 +10,7 @@ incident: plan(MCP Prompt 절차 반영) → gate(권위 게이트) → research
 """
 import asyncio
 import json
+import re
 import time
 from functools import partial
 from pathlib import Path
@@ -120,6 +121,13 @@ async def plan_node(state: AgentState, deps: SupervisorDeps) -> dict:
         server=prompt_server,
     )
     result, usage = deps.fast_llm.plan(state["query"], procedure)
+    # 모델이 낯선 이름을 기본 시스템으로 바꿔도 원래 요청 대상은 확인한다.
+    requested = re.findall(r"\b[a-z][a-z0-9-]*-(?:service|\d+)\b", state["query"])
+    planned = {t.get("target") for t in result["tasks"] if t["agent"] == "research"}
+    for target in dict.fromkeys(requested):
+        if target not in KNOWN_SYSTEMS and target not in planned:
+            result["tasks"].append({"id":"requested-"+target, "agent":"research",
+                                    "kind":"monitoring", "target":target, "status":"pending"})
     targets = [t["target"] for t in result["tasks"]
                if t["agent"] == "research" and t.get("target")]
     event = {"type": "PlanCreated", "task_count": len(result["tasks"]),

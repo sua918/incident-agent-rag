@@ -159,6 +159,16 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn('DB Down',result['reply'])
         self.assertIn('web-01',result['reply'])
 
+    def test_unknown_name_is_not_hidden_by_model_default(self):
+        llm=server.app.state.deps.fast_llm;original=llm.plan
+        def default_plan(*args):
+            return {'needs_analysis':False,'tasks':[{'id':'default','agent':'research','kind':'monitoring','target':'auth-service','status':'pending'}]}, {'usd':0}
+        llm.plan=default_plan
+        try: result=self.chat('missing-service 장애 진단해줘',thread='model-default')
+        finally: llm.plan=original
+        self.assertEqual(result['metadata']['status'],'needs_review')
+        self.assertIn('missing-service',[f['target'] for f in result['metadata']['failed_sources']])
+
     def test_wrong_observed_value_is_rewritten_then_held(self):
         class WrongWriter:
             calls=0
