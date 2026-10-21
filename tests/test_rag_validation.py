@@ -91,5 +91,9 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(self.check('확인한 매뉴얼 [missing:1]을 참고합니다.'))
         self.assertFalse(self.check('참고 매뉴얼 [cpu-spike:3]'))
 
+    def test_korean_state_particles_are_checked(self):
+        self.assertTrue(self.check('auth-service 상태가 healthy로 확인되었습니다.'))
+        self.assertEqual(self.check('auth-service 상태는 degraded입니다.'),[])
+
     def test_threshold_condition_is_not_a_measurement(self):
         self.assertEqual(self.check('auth-service CPU가 90%를 넘으면 부하 분산을 검토하세요.'),[])

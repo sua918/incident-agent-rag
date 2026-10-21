@@ -26,10 +26,10 @@ def validate_evidence(draft, observations, sources, query=''):
             field = 'cpu_percent' if match[1].lower()=='cpu' else 'memory_percent'
             if abs(float(match[2])-float(facts[name][field])) > .05:
                 issues.append(f'{name}의 {match[1]}는 조회값 {facts[name][field]}%와 다릅니다.')
-        pattern = '('+SYSTEM+r')\s*(?:의\s*)?상태\s*[=:]?\s*(healthy|degraded|down|정상|저하|다운)'
+        pattern = '('+SYSTEM+r')\s*(?:의\s*)?상태\s*[은는가]?\s*[=:]?\s*(healthy|degraded|down|정상|저하|다운)'
         for match in re.finditer(pattern,clause,re.I):
             expected = facts.get(match[1])
-            actual = {'정상':'healthy','저하':'degraded','다운':'down'}.get(match[2],match[2])
+            actual = {'정상':'healthy','저하':'degraded','다운':'down'}.get(match[2],match[2].lower())
             if not expected or expected['status'] != actual:
                 issues.append(f'{match[1]}의 상태가 조회 결과와 다릅니다.')
     return list(dict.fromkeys(issues))

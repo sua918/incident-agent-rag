@@ -11,13 +11,14 @@ fc
 사전 조건: `ollama serve` 실행 중 + `ollama pull qwen3:0.6b qwen3:8b`.
 """
 import json
+import os
 import re
 from pathlib import Path
 
 import httpx
 from langsmith import traceable
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/") + "/api/chat"
 
 
 def _load_known_systems() -> set[str]:
@@ -26,7 +27,7 @@ def _load_known_systems() -> set[str]:
     log-service 미인식) 수정."""
     path = Path(__file__).resolve().parent.parent / "data" / "monitoring.json"
     try:
-        return set(json.loads(path.read_text()).keys())
+        return set(json.loads(path.read_text(encoding="utf-8")).keys())
     except (OSError, json.JSONDecodeError):
         return {"auth-service", "web-01"}
 
@@ -97,7 +98,9 @@ class OllamaLLM:
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "stream": False,
-            "options": {"temperature": 0.0},
+            # 짧은 분류 요청에서도 추론이 길어질 수 있어 생성량을 제한한다.
+            "think": False,
+            "options": {"temperature": 0.0, "num_predict": 1200},
         }
         if schema is not None:
             payload["format"] = schema
@@ -120,7 +123,9 @@ class OllamaLLM:
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "stream": True,
-            "options": {"temperature": 0.0},
+            # 짧은 분류 요청에서도 추론이 길어질 수 있어 생성량을 제한한다.
+            "think": False,
+            "options": {"temperature": 0.0, "num_predict": 1200},
         }
         chunks: list[str] = []
         usage = {"model": self.name, "tokens": 0, "usd": 0.0}

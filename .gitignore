@@ -8,3 +8,6 @@ __pycache__/
 *.db-shm
 *.db-wal
 output/preview/
+
+tmp/
+doc/improvement/changes.patch

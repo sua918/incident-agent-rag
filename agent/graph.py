@@ -30,7 +30,7 @@ def _load_known_systems() -> set[str]:
     쿼리에서 멤버십 매칭으로 뽑아낼 때 쓴다."""
     path = Path(__file__).resolve().parent.parent / "data" / "monitoring.json"
     try:
-        return set(json.loads(path.read_text()).keys())
+        return set(json.loads(path.read_text(encoding="utf-8")).keys())
     except (OSError, json.JSONDecodeError):
         return {"auth-service", "web-01"}
 
@@ -195,33 +195,6 @@ async def research_node(state: AgentState, deps: SupervisorDeps) -> dict:
         events.append({"type": "TaskCompleted", "id": task["id"], "source": result["source"], "target": task["target"], "retries": result["retries"]})
     return {"tasks": new_tasks, "collected": collected, "failed_sources": failures,
             "retry_count": retry_total, "parallel_elapsed": elapsed, "events": events}
-
-
-# 수집된 모니터링 결과(상태·알림 문구)를 보고 어떤 runbook이 맞는지 고른다. LLM에게
-# 다시 묻는 대신 코드 레벨 규칙으로 판단한다 — gate(Wave 6)·replan(Wave 7)과 같은 설계
-# 원칙: 모델의 판단을 그대로 믿지 않고, 실측 데이터로 검증 가능한 결정은 코드가 내린다.
-_INCIDENT_TYPE_RULES = [
-    ("latency", "high-latency"),
-    ("pool", "high-latency"),
-    ("cpu", "cpu-spike"),
-    ("memory", "memory-leak"),
-    ("heap", "memory-leak"),
-    ("timeout", "network-timeout"),
-    ("network", "network-timeout"),
-    ("disk", "disk-full"),
-    ("down", "db-down"),
-]
-
-
-def _classify_incident_type(collected: list[dict]) -> str:
-    text = " ".join(
-        f"{c['data'].get('status', '')} " + " ".join(c["data"].get("alerts", []))
-        for c in collected if c.get("source") == "monitoring"
-    ).lower()
-    for keyword, incident_type in _INCIDENT_TYPE_RULES:
-        if keyword in text:
-            return incident_type
-    return "db-down"   # 매칭되는 증상이 없으면 가장 일반적인 장애 대응 절차로 폴백
 
 
 @traceable(name="replan_check_node")
