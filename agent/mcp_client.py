@@ -55,7 +55,7 @@ class MCPClient:
         for server_name, script in self._server_scripts.items():
             params = StdioServerParameters(
                 command=sys.executable, args=[str(script)],
-                env={**os.environ, "FASTMCP_LOG_LEVEL": "ERROR"})
+                env={**os.environ, "FASTMCP_LOG_LEVEL": "ERROR", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
             read, write = await self._stack.enter_async_context(stdio_client(params))
             session = await self._stack.enter_async_context(ClientSession(read, write))
             await session.initialize()

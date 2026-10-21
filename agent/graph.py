@@ -61,6 +61,9 @@ class AgentState(TypedDict, total=False):
     parallel_elapsed: float
     draft: str
     validation_attempts: int
+    failed_sources: list[dict]
+    validation_passed: bool
+    status: str
     validation_feedback: str
     final: str
     last_prompt: str
@@ -136,54 +139,51 @@ async def gate_node(state: AgentState, deps: SupervisorDeps) -> dict:
 
 @traceable(name="research_node")
 async def research_node(state: AgentState, deps: SupervisorDeps) -> dict:
-    """Wave 15 가드 + Wave 10b 병렬 + Wave 9 재시도 + Wave 2 Tool/Resource 실호출."""
     tasks = state["tasks"]
-    research_indices = [i for i, t in enumerate(tasks)
-                        if t["agent"] == "research" and t["status"] == "pending"]
-    # Wave 15 — 객체가 아니라 '실행할 목록'을 검사한다 (not research_agent 버그의 수정판)
-    if not research_indices:
-        return {"events": state["events"] +
-                [{"type": "ResearchSkipped", "reason": "pending research task 0개"}]}
+    indices = [i for i, task in enumerate(tasks)
+               if task["agent"] == "research" and task["status"] == "pending"]
+    if not indices:
+        return {"events": state["events"] + [{"type": "ResearchSkipped", "reason": "pending research task 0개"}]}
 
-    retry_total = state.get("retry_count", 0)
-
-    # URI를 코드에 하드코딩하지 않는다. 여러 MCP 서버가 연결돼 있고 그중 어느 서버가
-    # "get_incident_runbook" resource를 제공하는지 모른다고 가정하고, 먼저 연결된
-    # 서버들을 조회(list)해 유효한 서버를 찾은 뒤에만 그 서버로 요청한다.
-    needs_runbook = any(tasks[i]["kind"] != "monitoring" for i in research_indices)
-    runbook_server = runbook_uri_template = None
-    if needs_runbook:
-        runbook_server, runbook_uri_template = await deps.mcp.find_resource_template(
-            "get_incident_runbook")
-
-    async def run_one(idx: int) -> dict:
-        task = tasks[idx]
-        await asyncio.sleep(0.35)   # 태스크당 고정 지연 — 병렬 효과를 실측하기 위함
+    async def run_one(index):
+        task = tasks[index]
         if task["kind"] == "monitoring":
-            data, retries = await with_retry(
-                deps.mcp.call_tool, "get_monitoring_status",
-                {"system_name": task["target"]})
-            return {"idx": idx, "source": "monitoring", "data": data, "retries": retries}
-        uri = runbook_uri_template.format(incident_type=task["target"])
-        data = await deps.mcp.read_resource(uri, server=runbook_server)
-        return {"idx": idx, "source": "runbook", "data": data, "retries": 0}
+            data, retries = await with_retry(deps.mcp.call_tool, "get_monitoring_status", {"system_name": task["target"]})
+            if not isinstance(data, dict) or "status" not in data:
+                raise ValueError("모니터링 응답 형식 오류")
+            if data["status"] not in {"healthy", "degraded", "down"}:
+                raise LookupError("등록된 시스템의 모니터링 상태를 확인할 수 없습니다.")
+            return {"source": "monitoring", "data": data, "retries": retries}
+        server, template = await deps.mcp.find_resource_template("get_incident_runbook")
+        data = await deps.mcp.read_resource(template.format(incident_type=task["target"]), server=server)
+        if not data.strip() or data.lstrip().startswith("# Runbook Not Found"):
+            raise LookupError("대응 매뉴얼 없음")
+        return {"source": "runbook", "data": data, "retries": 0}
 
     started = time.perf_counter()
-    results = await asyncio.gather(*(run_one(i) for i in research_indices))
+    # 한 조회가 실패해도 다른 작업에서 받은 자료는 남긴다.
+    results = await asyncio.gather(*(run_one(i) for i in indices), return_exceptions=True)
     elapsed = round(time.perf_counter() - started, 2)
-
-    new_tasks = [dict(t) for t in tasks]
+    new_tasks = [dict(task) for task in tasks]
     collected = list(state.get("collected", []))
+    failures = list(state.get("failed_sources", []))
     events = list(state["events"])
-    for r in results:
-        new_tasks[r["idx"]]["status"] = "done"
-        collected.append({"source": r["source"], "data": r["data"]})
-        retry_total += r["retries"]
-        events.append({"type": "TaskCompleted", "id": new_tasks[r["idx"]]["id"],
-                       "source": r["source"], "target": new_tasks[r["idx"]]["target"],
-                       "retries": r["retries"]})
-    return {"tasks": new_tasks, "collected": collected, "retry_count": retry_total,
-            "parallel_elapsed": elapsed, "events": events}
+    retry_total = state.get("retry_count", 0)
+    for index, result in zip(indices, results):
+        task = tasks[index]
+        source = "monitoring" if task["kind"] == "monitoring" else "runbook"
+        if isinstance(result, BaseException):
+            new_tasks[index]["status"] = "failed"
+            failure = {"task_id": task["id"], "source": source, "target": task.get("target", ""), "error": type(result).__name__}
+            failures.append(failure)
+            events.append({"type": "TaskFailed", **failure})
+            continue
+        new_tasks[index]["status"] = "done"
+        collected.append({"source": result["source"], "data": result["data"]})
+        retry_total += result["retries"]
+        events.append({"type": "TaskCompleted", "id": task["id"], "source": result["source"], "target": task["target"], "retries": result["retries"]})
+    return {"tasks": new_tasks, "collected": collected, "failed_sources": failures,
+            "retry_count": retry_total, "parallel_elapsed": elapsed, "events": events}
 
 
 # 수집된 모니터링 결과(상태·알림 문구)를 보고 어떤 runbook이 맞는지 고른다. LLM에게
@@ -216,6 +216,12 @@ def _classify_incident_type(collected: list[dict]) -> str:
 @traceable(name="replan_check_node")
 async def replan_check_node(state: AgentState, deps: SupervisorDeps) -> dict:
     """Wave 7 — 1차 수집 결과 평가. runbook이 없으면 gap task만 추가해 재조사."""
+    if not state.get("collected") and state.get("failed_sources"):
+        return {"events": state["events"] + [{"type": "ReplanCheck", "round": state.get("replan_rounds", 0), "is_sufficient": True, "reason": "추가 조사 기준이 되는 자료 없음"}]}
+    if state.get("failed_sources") and not any(
+            item.get("source") == "monitoring" and item["data"].get("status") in {"degraded", "down"}
+            for item in state.get("collected", [])):
+        return {"events": state["events"] + [{"type": "ReplanCheck", "round": state.get("replan_rounds", 0), "is_sufficient": True, "reason": "조회하지 못한 대상의 장애 유형을 추정하지 않음"}]}
     has_runbook = any(c["source"] == "runbook" for c in state.get("collected", []))
     rounds = state.get("replan_rounds", 0)
     if has_runbook or rounds >= 1:
@@ -253,45 +259,54 @@ async def analysis_node(state: AgentState, deps: SupervisorDeps) -> dict:
 
 @traceable(name="write_node")
 async def write_node(state: AgentState, deps: SupervisorDeps) -> dict:
-    """Wave 8/10a — 고품질 모델로 초안 작성 (1차는 의도적 저품질).
-
-    토큰마다 attempt 번호를 같이 실어 보낸다 — validate가 반려해 재작성(attempt 증가)
-    될 때 프론트가 새 말풍선으로 끊어서 보여줄 수 있게 하기 위함(Wave 8 재작성 루프를
-    그대로 노출)."""
+    if not state.get("collected"):
+        return {"draft": "", "events": state["events"] + [{"type": "DraftSkipped", "reason": "조회 자료 없음"}]}
     attempt = state.get("validation_attempts", 0) + 1
-    writer = get_stream_writer()
+    # 작성 중인 초안은 숨기고, 검증이 끝난 답변만 화면에 보낸다.
     draft, usage = await deps.quality_llm.write(
-        state["query"], state.get("collected", []),
-        attempt, state.get("validation_feedback"),
-        on_token=lambda piece: writer(
-            {"type": "AnswerToken", "attempt": attempt, "delta": piece}))
-    return {"draft": draft, "last_prompt": usage.get("prompt"),
-            "cost_usd": _cost(state, usage),
-            "events": state["events"] + [{"type": "DraftWritten", "attempt": attempt,
-                                          "length": len(draft)}]}
+        state["query"], state["collected"], attempt, state.get("validation_feedback"))
+    return {"draft": draft, "last_prompt": usage.get("prompt"), "cost_usd": _cost(state, usage),
+            "events": state["events"] + [{"type": "DraftWritten", "attempt": attempt, "length": len(draft)}]}
 
 
 @traceable(name="validate_node")
 async def validate_node(state: AgentState, deps: SupervisorDeps) -> dict:
-    """Wave 8 — 코드 기준 검증: 30자 이상 + 절차 번호 포함이어야 합격."""
     draft = state["draft"]
     attempts = state.get("validation_attempts", 0) + 1
-    ok = len(draft) >= 30 and "1)" in draft
-    verdict = "합격" if ok else "불합격"
-    if not ok and attempts >= 3:   # 실모델 무한 재작성 방지 — 최대 3회 후 통과 처리
-        ok, verdict = True, "합격(최대 시도 도달 — 통과 처리)"
-    feedback = None if ok else (
-        f"응답이 너무 짧습니다({len(draft)}자, 최소 30자). 절차를 1) 2) 3) 번호로 "
-        f"구체적으로 설명하세요.")
-    event = {"type": "Validation", "attempt": attempts, "verdict": verdict}
-    return {"validation_attempts": attempts, "validation_feedback": feedback,
-            "events": state["events"] + [event]}
+    issues = []
+    if not state.get("collected"):
+        issues.append("진단에 필요한 조회 자료가 없습니다.")
+    if len(draft) < 30:
+        issues.append("답변을 30자 이상으로 구체적으로 설명하세요.")
+    if "1)" not in draft:
+        issues.append("대응 절차를 1) 2) 3) 번호로 설명하세요.")
+    passed = not issues
+    exhausted = not passed and (attempts >= 3 or not state.get("collected"))
+    verdict = "합격" if passed else ("확인 필요" if exhausted else "불합격")
+    return {"validation_attempts": attempts, "validation_passed": passed,
+            "validation_feedback": " ".join(issues) if issues else None,
+            "events": state["events"] + [{"type": "Validation", "attempt": attempts, "verdict": verdict}]}
 
 
 @traceable(name="finalize_node")
 async def finalize_node(state: AgentState, deps: SupervisorDeps) -> dict:
-    return {"final": state["draft"],
-            "events": state["events"] + [{"type": "Finalize", "pipeline": "incident-v2"}]}
+    failures = state.get("failed_sources", [])
+    passed = state.get("validation_passed", False)
+    review = bool(failures) or not passed
+    if not state.get("collected"):
+        reply = "진단 자료를 조회하지 못해 결과를 확정할 수 없습니다. 모니터링 연결을 확인한 뒤 다시 요청해 주세요."
+    elif not passed:
+        reply = "답변을 3회 확인했지만 검증 기준을 충족하지 못했습니다. 담당자가 조회 자료와 대응 절차를 직접 확인해 주세요."
+    else:
+        reply = state["draft"]
+        if failures:
+            reply = "일부 자료를 조회하지 못했습니다. 아래 내용은 확인된 자료에 한하며 담당자 확인이 필요합니다.\n\n" + reply
+    if failures:
+        targets = ", ".join(dict.fromkeys(item["target"] for item in failures))
+        reply += "\n\n조회하지 못한 대상: " + targets
+    status = "needs_review" if review else "completed"
+    return {"final": reply, "status": status,
+            "events": state["events"] + [{"type": "Finalize", "pipeline": "incident-v2", "status": status}]}
 
 
 def _after_route(state: AgentState) -> str:
@@ -304,7 +319,9 @@ def _after_replan_check(state: AgentState) -> str:
 
 
 def _after_validate(state: AgentState) -> str:
-    return "finalize" if state.get("validation_feedback") is None else "write"
+    if state.get("validation_passed") or state.get("validation_attempts", 0) >= 3 or not state.get("collected"):
+        return "finalize"
+    return "write"
 
 
 def build_graph(deps: SupervisorDeps):

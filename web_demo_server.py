@@ -12,14 +12,17 @@ server.py는 평소처럼(fake/ollama/openai 아무 백엔드로나) 8100에 미
 실행:
     python3 web_demo_server.py        # http://localhost:8600 에서 채팅 화면 오픈
 """
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-BACKEND = "http://127.0.0.1:8100"
+load_dotenv(Path(__file__).parent / ".env")
+BACKEND = os.getenv("BACKEND_URL", "http://127.0.0.1:8130")
 HERE = Path(__file__).parent
 
 app = FastAPI()
@@ -60,6 +63,20 @@ async def proxy_stream(message: str, thread_id: str = "web-demo"):
     return StreamingResponse(relay(), media_type="text/event-stream")
 
 
+@app.get("/diagnoses")
+async def diagnoses(q: str = "", status: str = ""):
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(BACKEND + "/diagnoses", params={"q": q, "status": status})
+    return JSONResponse(response.json(), status_code=response.status_code)
+
+
+@app.get("/diagnoses/{diagnosis_id}")
+async def diagnosis(diagnosis_id: str):
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(BACKEND + "/diagnoses/" + diagnosis_id)
+    return JSONResponse(response.json(), status_code=response.status_code)
+
+
 if __name__ == "__main__":
-    print("브라우저에서 http://localhost:8600 을 열어보세요 (server.py가 8100에 떠 있어야 합니다)")
-    uvicorn.run(app, host="0.0.0.0", port=8600)
+    print("브라우저에서 http://127.0.0.1:8630 을 열어보세요.")
+    uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("FRONTEND_PORT", "8630")))

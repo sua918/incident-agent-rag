@@ -14,9 +14,10 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
-load_dotenv()   # LANGCHAIN_TRACING_V2 / API_KEY / PROJECT — import보다 먼저
+from pathlib import Path
+load_dotenv(Path(__file__).parent / ".env")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from langsmith import traceable
 from langsmith.run_helpers import get_current_run_tree
@@ -71,7 +72,7 @@ async def lifespan(app: FastAPI):
         fast_llm=fast_llm,
         quality_llm=quality_llm,
         mcp=mcp,
-        session_store=SqliteSessionStore(),
+        session_store=SqliteSessionStore(Path(os.getenv("SESSION_DATABASE", Path(__file__).parent / "session.db"))),
         version=os.environ.get("SUPERVISOR_VERSION", "v2"),
     )
     app.state.deps = deps
@@ -107,6 +108,10 @@ async def version():
 
 def _metadata(result: dict, run_id: str | None) -> dict:
     return {
+        "status": result.get("status", "completed"),
+        "validation_passed": result.get("validation_passed"),
+        "failed_sources": result.get("failed_sources", []),
+        "diagnosis_id": result.get("diagnosis_id"),
         "route": result.get("route"),
         "task_count": len(result.get("tasks", [])),
         "gate_removed": result.get("gate_removed", 0),
@@ -134,6 +139,7 @@ async def _handle_chat(message: str, thread_id: str) -> tuple[dict, str | None]:
         result = await run_v1(deps, message, thread_id, history)   # Wave 14
     deps.session_store.append(thread_id, "user", message)
     deps.session_store.append(thread_id, "assistant", result["final"])
+    result["diagnosis_id"] = deps.session_store.save_diagnosis(thread_id, message, result)
     rt = get_current_run_tree()
     return result, (str(rt.id) if rt else None)
 
@@ -164,7 +170,7 @@ async def chat_stream(message: str, thread_id: str = "default"):
         else:
             seen = 0
             final = ""
-            last_prompt = None   # finalize까지 살아남은 최종 write/chat 호출의 실제 프롬프트
+            summary = {}
             # stream_mode를 리스트로 주면 (mode, payload) 튜플이 나온다 — "updates"는
             # 노드가 끝날 때마다의 상태 델타, "custom"은 write_node/chat_answer_node가
             # get_stream_writer()로 실행 중에 즉시 흘려보내는 토큰(AnswerToken) 이벤트다.
@@ -175,6 +181,7 @@ async def chat_stream(message: str, thread_id: str = "default"):
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     continue
                 for node_name, delta in payload.items():
+                    summary.update(delta)
                     for ev in (delta.get("events") or [])[seen:]:
                         ev = {**ev, "node": node_name}
                         yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
@@ -182,16 +189,32 @@ async def chat_stream(message: str, thread_id: str = "default"):
                         seen = len(delta["events"])
                     if delta.get("final"):
                         final = delta["final"]
-                    if delta.get("last_prompt"):
-                        last_prompt = delta["last_prompt"]
-            yield f"data: {json.dumps({'type': 'FinalAnswer', 'reply': final, 'prompt': last_prompt}, ensure_ascii=False)}\n\n"
+            summary["final"] = final
+            diagnosis_id = deps.session_store.save_diagnosis(thread_id, message, summary)
             deps.session_store.append(thread_id, "user", message)
             deps.session_store.append(thread_id, "assistant", final)
+            answer = {"type": "FinalAnswer", "reply": final, "status": summary.get("status", "completed"), "validation_passed": summary.get("validation_passed"), "diagnosis_id": diagnosis_id}
+            yield f"data: {json.dumps(answer, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+@app.get("/diagnoses")
+async def diagnoses(q: str = "", status: str = ""):
+    if status not in {"", "completed", "needs_review"}:
+        raise HTTPException(422, "올바른 진단 상태를 선택해 주세요.")
+    return app.state.deps.session_store.list_diagnoses(q, status)
+
+
+@app.get("/diagnoses/{diagnosis_id}")
+async def diagnosis(diagnosis_id: str):
+    value = app.state.deps.session_store.get_diagnosis(diagnosis_id)
+    if value is None:
+        raise HTTPException(404, "진단 이력을 찾을 수 없습니다.")
+    return value
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8100, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("BACKEND_PORT", "8130")), log_level="warning")
