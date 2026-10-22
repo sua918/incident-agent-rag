@@ -18,6 +18,8 @@ import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
 
+from agent.retry import with_retry
+
 from langsmith import traceable
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -74,7 +76,21 @@ class MCPClient:
             raise asyncio.TimeoutError("simulated transient timeout (Wave 9 demo)")
         async with self._lock:
             result = await self.sessions[server].call_tool(name, arguments)
+        if getattr(result, "is_error", getattr(result, "isError", False)):
+            raise ValueError(f"MCP 도구 실행 실패: {name}")
         return json.loads(result.content[0].text)
+
+    async def search(self, query: str, observations: list[dict]) -> dict:
+        """그래프의 검색 요청을 MCP Tool 호출로 전달한다."""
+        try:
+            result, _ = await with_retry(
+                self.call_tool, "search_runbook",
+                {"query": query, "observations": observations},
+            )
+            return result
+        except Exception as exc:
+            # 도구 연결 실패도 근거 부족으로 전달해 성공한 관측 자료를 보존한다.
+            return {"mode": "unavailable", "hits": [], "fallback_reason": type(exc).__name__}
 
     @traceable(run_type="tool", name="mcp.list_resource_templates")
     async def list_resource_templates(self, server: str) -> list:

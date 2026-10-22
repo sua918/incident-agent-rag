@@ -17,7 +17,7 @@ class SupervisorDeps:
     session_store: Any   # Wave 12 — SQLite 세션 저장소
     version: str         # Wave 14 — SUPERVISOR_VERSION (v1/v2)
 
-    search: Any = None   # 매뉴얼 검색은 테스트에서 고정 검색으로 바꿔 끼운다.
+    search: Any = None   # MCP 검색을 주입하고, 테스트에서는 고정 검색으로 교체한다.
 
 
 def resolve_llm_backend():

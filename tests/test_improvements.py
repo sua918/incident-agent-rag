@@ -194,6 +194,37 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get('/diagnoses?status=unknown').status_code,422)
         self.assertEqual(self.client.get('/diagnoses/missing').status_code,404)
 
+    def test_graph_uses_mcp_search_tool(self):
+        from unittest.mock import patch
+        mcp = server.app.state.deps.mcp
+        original = mcp.call_tool
+        names = []
+        async def record(name, arguments, server='ops'):
+            names.append(name)
+            return await original(name, arguments, server=server)
+        with patch.object(mcp, 'call_tool', new=record):
+            result = self.chat(thread='mcp-search')
+        self.assertIn('search_runbook', names)
+        self.assertEqual(result['metadata']['status'], 'completed')
+        self.assertEqual(len(result['metadata']['sources']), 3)
+
+    def test_mcp_search_failure_keeps_monitoring_and_marks_review(self):
+        from unittest.mock import patch
+        mcp = server.app.state.deps.mcp
+        original = mcp.call_tool
+        async def fail_search(name, arguments, server='ops'):
+            if name == 'search_runbook':
+                raise ConnectionError('MCP search unavailable')
+            return await original(name, arguments, server=server)
+        with patch.object(mcp, 'call_tool', new=fail_search):
+            result = self.chat(thread='mcp-search-unavailable')
+        metadata = result['metadata']
+        self.assertEqual(metadata['status'], 'needs_review')
+        self.assertEqual(metadata['search_mode'], 'unavailable')
+        self.assertTrue(metadata['facts'])
+        self.assertEqual(metadata['sources'], [])
+        self.assertTrue(any(item['error'] == 'ConnectionError' for item in metadata['failed_sources']))
+
     def test_z_history_survives_server_restart(self):
         result=self.chat(thread='restart')
         diagnosis=result['metadata']['diagnosis_id']

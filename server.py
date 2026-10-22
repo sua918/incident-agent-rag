@@ -26,7 +26,6 @@ from pydantic import BaseModel
 from agent.deps import SupervisorDeps, resolve_llm_backend
 from agent.fake_llm import FastLLM, QualityLLM
 from agent.graph import build_graph
-from agent.rag import RunbookSearch
 from agent.mcp_client import MCPClient
 from agent.session_store import SqliteSessionStore
 from agent.supervisor_v1 import run_v1
@@ -77,7 +76,7 @@ async def lifespan(app: FastAPI):
         mcp=mcp,
         session_store=SqliteSessionStore(Path(os.getenv("SESSION_DATABASE", Path(__file__).parent / "session.db"))),
         version=os.environ.get("SUPERVISOR_VERSION", "v2"),
-        search=RunbookSearch(),
+        search=mcp,
     )
     app.state.deps = deps
     app.state.graph = build_graph(deps) if deps.version == "v2" else None

@@ -224,7 +224,7 @@ async def replan_check_node(state: AgentState, deps: SupervisorDeps) -> dict:
     kinds = list(dict.fromkeys(hit["incident_type"] for hit in search["hits"]))
     event = {"type":"RunbookSearch", "mode":search["mode"], "count":len(search["hits"])}
     if not kinds:
-        failure = {"task_id":"runbook-search", "source":"runbook", "target":"관련 매뉴얼", "error":"NoEvidence"}
+        failure = {"task_id":"runbook-search", "source":"runbook", "target":"관련 매뉴얼", "error":search.get("fallback_reason") or "NoEvidence"}
         return {"runbook_search":search,"failed_sources":state.get("failed_sources",[])+[failure],
                 "events":state["events"]+[event,{"type":"ReplanCheck","round":rounds,"is_sufficient":True}]}
     # 검색한 문서만 원문으로 확인하고, 추가 조사는 한 번으로 제한한다.
