@@ -116,25 +116,25 @@ scripts/                  설치·실행·검증 명령
 
 관련 문단 세 개를 펼쳐 본 화면이다. 문서 제목과 문단 ID, 실제 사용한 본문을 답변과 함께 확인할 수 있다.
 
-![검색한 매뉴얼 문단과 출처](doc/screenshots/rag-evidence.png)
+![검색한 매뉴얼 문단과 출처](docs/screenshots/rag-evidence.png)
 
 ### 조회 실패 처리
 
 `missing-service 장애 진단해줘`를 입력한 결과다. 조회하지 못한 대상은 따로 안내하고, 성공한 web-01 자료를 이용해 확인 필요 상태로 저장했다.
 
-![일부 조회 실패와 확인 필요 안내](doc/screenshots/review.png)
+![일부 조회 실패와 확인 필요 안내](docs/screenshots/review.png)
 
 ### 진단 이력
 
 저장한 진단의 상태, 답변과 참고 문단을 다시 조회한 화면이다. 이력 목록에서는 질문·답변 검색과 상태 필터를 사용할 수 있다.
 
-![저장된 진단 상세와 참고 매뉴얼](doc/screenshots/history.png)
+![저장된 진단 상세와 참고 매뉴얼](docs/screenshots/history.png)
 
 ### 최종 실행 화면
 
 `auth-service 로그인 응답 지연 장애를 진단해줘`를 입력했다. 모니터링 조회, 문단 검색, 매뉴얼 원문 확인을 거쳐 답변을 작성했다. 첫 초안은 형식 검사에서 반려됐고, 두 번째 작성에서 검증을 통과했다.
 
-![조사부터 재작성과 최종 답변까지의 실행 결과](doc/screenshots/final-result.png)
+![조사부터 재작성과 최종 답변까지의 실행 결과](docs/screenshots/final-result.png)
 
 위 기능 화면은 fake 작성 모델과 실제 Ollama 임베딩 검색을 연결해 촬영했다. 고정 응답을 사용한 흐름 확인과 실제 생성 모델 실행 결과는 아래 검증 결과에서 구분한다.
 
@@ -189,7 +189,7 @@ MCP 하위 프로세스는 실제로 연결하며, 그래프의 `search_runbook`
 
 수치는 **정답 매뉴얼 문서의 포함 여부**다. 상위 3개 문단에 같은 문서가 중복될 수 있으며, 문단별 정답률·최종 답변 정확도·전체 처리 시간을 뜻하지 않는다. 고정 입력은 `eval/cases.json`에 있다.
 
-![동일 입력 12건의 검색 결과와 지연 비교](doc/screenshots/search-comparison.png)
+![동일 입력 12건의 검색 결과와 지연 비교](docs/screenshots/search-comparison.png)
 
 `scripts/evaluate.py`의 저장된 실행 결과를 표시한 캡처다. 두 검색 방식에 같은 질문과 관측 자료를 전달했다.
 
