@@ -11,3 +11,17 @@ output/preview/
 
 tmp/
 doc/improvement/changes.patch
+
+/doc/changes.md
+/doc/demo.md
+/doc/presentation.md
+/doc/results.md
+/doc/slides.html
+/doc/screenshots/*
+!/doc/screenshots/rag-evidence.png
+!/doc/screenshots/review.png
+!/doc/screenshots/history.png
+!/doc/screenshots/final-result.png
+!/doc/screenshots/search-comparison.png
+/doc/results/
+/doc/improvement/

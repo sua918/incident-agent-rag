@@ -97,3 +97,75 @@ class EvidenceTests(unittest.TestCase):
 
     def test_threshold_condition_is_not_a_measurement(self):
         self.assertEqual(self.check('auth-service CPU가 90%를 넘으면 부하 분산을 검토하세요.'),[])
+
+
+class BackendSelectionTests(unittest.IsolatedAsyncioTestCase):
+    def test_numbers_select_generation_and_embedding_provider(self):
+        from agent.deps import resolve_llm_backend
+        from agent.rag import OllamaEmbeddings, OpenAIEmbeddings
+        from server import _build_llms
+        with tempfile.TemporaryDirectory() as directory:
+            for option, provider, embedding in [('1', 'ollama', OllamaEmbeddings),
+                                                 ('2', 'openai', OpenAIEmbeddings)]:
+                with self.subTest(option=option), patch.dict(os.environ, {
+                    'LLM_BACKEND': option, 'OPENAI_API_KEY': 'test-key',
+                }):
+                    self.assertEqual(resolve_llm_backend(), provider)
+                    backend, fast, quality = _build_llms()
+                    self.assertEqual(backend, provider)
+                    self.assertTrue(fast.name.startswith(provider + ':'))
+                    self.assertTrue(quality.name.startswith(provider + ':'))
+                    search = RunbookSearch(Path(directory) / 'test.db')
+                    self.assertIsInstance(search.embedder, embedding)
+
+    def test_legacy_names_and_invalid_choice(self):
+        from agent.deps import resolve_llm_backend
+        for name in ['ollama', 'openai', 'fake']:
+            with patch.dict(os.environ, {'LLM_BACKEND': name}):
+                self.assertEqual(resolve_llm_backend(), name)
+        with patch.dict(os.environ, {'LLM_BACKEND': '3'}):
+            with self.assertRaises(ValueError):
+                resolve_llm_backend()
+
+    async def test_openai_requires_key_before_requests(self):
+        from agent.rag import OpenAIEmbeddings
+        from server import _build_llms
+        with patch.dict(os.environ, {'LLM_BACKEND': '2', 'OPENAI_API_KEY': ''}):
+            with self.assertRaisesRegex(ValueError, 'OPENAI_API_KEY'):
+                _build_llms()
+            with self.assertRaisesRegex(ValueError, 'OPENAI_API_KEY'):
+                await OpenAIEmbeddings().embed(['CPU'])
+
+    async def test_openai_request_and_response_order(self):
+        import httpx
+        from agent.rag import OpenAIEmbeddings
+        import json
+
+        def respond(request):
+            self.assertEqual(str(request.url), 'https://api.openai.com/v1/embeddings')
+            self.assertEqual(request.headers['Authorization'], 'Bearer test-key')
+            self.assertEqual(json.loads(request.content), {
+                'model': 'test-embedding', 'input': ['CPU', 'memory'], 'encoding_format': 'float',
+            })
+            return httpx.Response(200, json={'data': [
+                {'index': 1, 'embedding': [0., 1.]},
+                {'index': 0, 'embedding': [1., 0.]},
+            ]})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-key', 'OPENAI_EMBEDDING_MODEL': 'test-embedding'}), \
+             patch('agent.rag.httpx.AsyncClient', return_value=client):
+            self.assertEqual(await OpenAIEmbeddings().embed(['CPU', 'memory']), [[1., 0.], [0., 1.]])
+
+    async def test_openai_failure_keeps_rule_fallback(self):
+        import httpx
+        with tempfile.TemporaryDirectory() as directory:
+            client = httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(401, json={'error': {'message': 'Invalid key'}})))
+            with patch.dict(os.environ, {'LLM_BACKEND': '2', 'OPENAI_API_KEY': 'test-key', 'RUNBOOK_SEARCH': 'rag'}), \
+                 patch('agent.rag.httpx.AsyncClient', return_value=client):
+                search = RunbookSearch(Path(directory) / 'test.db')
+                result = await search.search('CPU', [{'status': 'degraded', 'alerts': ['CPU 91%']}])
+                self.assertEqual(result['mode'], 'rules_fallback')
+                self.assertEqual(result['hits'][0]['incident_type'], 'cpu-spike')
+                self.assertEqual(result['fallback_reason'], 'HTTPStatusError')

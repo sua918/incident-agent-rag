@@ -11,6 +11,8 @@ from pathlib import Path
 
 import httpx
 
+from agent.deps import resolve_llm_backend
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -42,12 +44,36 @@ class OllamaEmbeddings:
         return vectors
 
 
+class OpenAIEmbeddings:
+    def __init__(self):
+        self.model = os.getenv('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small')
+
+    async def embed(self, texts):
+        key = os.getenv('OPENAI_API_KEY', '').strip()
+        if not key:
+            raise ValueError('OPENAI_API_KEY가 설정되지 않았습니다.')
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                'https://api.openai.com/v1/embeddings',
+                headers={'Authorization': f'Bearer {key}'},
+                json={'model': self.model, 'input': texts, 'encoding_format': 'float'},
+            )
+            response.raise_for_status()
+            items = sorted(response.json()['data'], key=lambda item: item['index'])
+        if [item['index'] for item in items] != list(range(len(texts))):
+            raise ValueError('임베딩 응답의 입력 순서가 올바르지 않습니다.')
+        vectors = [item['embedding'] for item in items]
+        if any(not v or any(not math.isfinite(x) for x in v) for v in vectors):
+            raise ValueError('올바른 임베딩을 받지 못했습니다.')
+        return vectors
+
+
 class RunbookSearch:
     def __init__(self, database=None, directory=None, embedder=None):
         self.database = Path(database or os.getenv('SESSION_DATABASE',ROOT/'session.db'))
         self.directory = Path(directory or ROOT/'data/runbooks')
         self.database.parent.mkdir(parents=True,exist_ok=True)
-        self.embedder = embedder or OllamaEmbeddings()
+        self.embedder = embedder or (OpenAIEmbeddings() if resolve_llm_backend() == 'openai' else OllamaEmbeddings())
         self.lock = asyncio.Lock()
         with closing(sqlite3.connect(self.database)) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS runbook_chunks(id TEXT PRIMARY KEY,incident_type TEXT,title TEXT,text TEXT,content_hash TEXT,embedding TEXT,model TEXT)')

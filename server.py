@@ -23,7 +23,7 @@ from langsmith import traceable
 from langsmith.run_helpers import get_current_run_tree
 from pydantic import BaseModel
 
-from agent.deps import SupervisorDeps
+from agent.deps import SupervisorDeps, resolve_llm_backend
 from agent.fake_llm import FastLLM, QualityLLM
 from agent.graph import build_graph
 from agent.rag import RunbookSearch
@@ -40,8 +40,8 @@ class ChatRequest(BaseModel):   # Wave 1 — Pydantic 요청 검증
 
 
 def _build_llms():
-    """LLM_BACKEND=fake(기본, 결정론) | ollama(로컬 실모델) | openai(실제 OpenAI API)."""
-    backend = os.environ.get("LLM_BACKEND", "fake")
+    """LLM_BACKEND=1(ollama) | 2(openai) | fake(테스트용). 기존 이름도 지원한다."""
+    backend = resolve_llm_backend()
     if backend == "ollama":
         from agent.ollama_llm import OllamaFastLLM, OllamaQualityLLM
         fast = OllamaFastLLM(os.environ.get("OLLAMA_FAST_MODEL", "qwen3:0.6b"),
@@ -50,6 +50,8 @@ def _build_llms():
                                    usd_per_1k_tokens=0.005)
         return backend, fast, quality
     if backend == "openai":
+        if not os.getenv("OPENAI_API_KEY", "").strip():
+            raise ValueError("OpenAI를 사용하려면 .env에 OPENAI_API_KEY를 설정하세요.")
         from agent.openai_llm import OpenAIFastLLM, OpenAIQualityLLM
         fast = OpenAIFastLLM(os.environ.get("OPENAI_FAST_MODEL", "gpt-4o-mini"),
                              usd_per_1k_tokens=0.00015)
@@ -65,9 +67,9 @@ def _build_llms():
 async def lifespan(app: FastAPI):
     global CREATION_COUNT
     CREATION_COUNT += 1
+    backend, fast_llm, quality_llm = _build_llms()
     mcp = MCPClient()
     await mcp.start()   # Wave 2 — MCP subprocess는 서버 수명 동안 딱 1개
-    backend, fast_llm, quality_llm = _build_llms()
     app.state.llm_backend = backend
     deps = SupervisorDeps(
         fast_llm=fast_llm,

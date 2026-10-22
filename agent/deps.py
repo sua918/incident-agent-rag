@@ -4,6 +4,7 @@
 의존성을 SupervisorDeps 하나에 명시적으로 담아 functools.partial로 각 노드에 주입한다.
 파일을 어디로 옮겨도, 단위 테스트에서 mock deps로 갈아 끼워도 동작이 같다.
 """
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,3 +18,13 @@ class SupervisorDeps:
     version: str         # Wave 14 — SUPERVISOR_VERSION (v1/v2)
 
     search: Any = None   # 매뉴얼 검색은 테스트에서 고정 검색으로 바꿔 끼운다.
+
+
+def resolve_llm_backend():
+    """숫자 선택과 기존 설정 이름을 같은 연결 방식으로 맞춘다."""
+    value = os.getenv('LLM_BACKEND', 'fake').strip().lower()
+    backends = {'1': 'ollama', '2': 'openai',
+                'ollama': 'ollama', 'openai': 'openai', 'fake': 'fake'}
+    if value not in backends:
+        raise ValueError('LLM_BACKEND는 1(Ollama), 2(OpenAI), fake 중 하나로 설정하세요.')
+    return backends[value]
